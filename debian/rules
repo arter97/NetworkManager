@@ -1,0 +1,84 @@
+#!/usr/bin/make -f
+
+include /usr/share/dpkg/architecture.mk
+
+ifeq ($(shell dpkg-vendor --is Ubuntu && echo yes) $(DEB_HOST_ARCH), yes i386)
+   BUILD_PACKAGES += -Nnetwork-manager
+   NETPLAN += --disable-netplan
+endif
+
+# Disable lto here regardless of whether we enable the configure flag
+# https://gitlab.freedesktop.org/NetworkManager/NetworkManager/-/issues/1070
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all optimize=-lto
+
+export PYTHON=/usr/bin/python3
+
+PPPD_PLUGIN_DIR := $(shell dh_ppp --plugin-dir)
+
+%:
+	dh $@ --with ppp $(BUILD_PACKAGES)
+
+override_dh_autoreconf:
+	NOCONFIGURE=true dh_autoreconf ./autogen.sh
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+		--libexecdir=/usr/lib/NetworkManager \
+		--runstatedir=/run \
+		--with-pppd-plugin-dir=$(PPPD_PLUGIN_DIR) \
+		--with-pppd=/usr/sbin/pppd \
+		--with-nft=/usr/sbin/nft \
+		--with-iptables=/usr/sbin/iptables \
+		--with-resolvconf=/sbin/resolvconf \
+		--with-dhclient=/sbin/dhclient \
+		--with-dnsmasq=/usr/sbin/dnsmasq \
+		--with-modprobe=/sbin/modprobe \
+		--with-polkit-agent-helper-1=/usr/lib/policykit-1/polkit-agent-helper-1 \
+		--with-systemdsystemunitdir=/lib/systemd/system \
+		--with-udev-dir=/lib/udev \
+		--with-dbus-sys-dir=/usr/share/dbus-1/system.d \
+		--with-crypto=gnutls \
+		--with-session-tracking=systemd \
+		--with-suspend-resume=systemd \
+		--with-modem-manager-1 \
+		--with-nmtui \
+		--with-nmcli \
+		--with-selinux \
+		--with-tests \
+		--with-libaudit \
+		--with-iwd \
+		--without-dhcpcanon \
+		--without-nm-cloud-setup \
+		--enable-polkit \
+		--enable-polkit-agent \
+		--enable-ppp \
+		--enable-ifupdown \
+		--enable-introspection \
+		--enable-gtk-doc \
+		--enable-concheck \
+		--enable-teamdctl \
+		--enable-json-validation \
+		--enable-bluez5-dun \
+		--enable-vala \
+		--enable-lto \
+		--disable-more-warnings \
+		--disable-modify-system \
+		--disable-ovs $(NETPLAN)
+
+override_dh_install:
+	find debian/tmp -name '*.la' -print -delete
+	rm -vf $(CURDIR)/debian/tmp/etc/init.d/NetworkManager
+	dh_install
+
+override_dh_installinit:
+	dh_installinit --noscripts
+
+override_dh_makeshlibs:
+	dh_makeshlibs -X/usr/lib/$(DEB_HOST_MULTIARCH)/NetworkManager/ -X/usr/lib/pppd/
+
+override_dh_installsystemd:
+	dh_installsystemd -pnetwork-manager --no-start NetworkManager-dispatcher.service NetworkManager-wait-online.service nm-priv-helper.service
+	dh_installsystemd -pnetwork-manager --no-also NetworkManager.service
+
+override_dh_ppp:
+	dh_ppp --breaks

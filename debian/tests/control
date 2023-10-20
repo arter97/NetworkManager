@@ -1,0 +1,19 @@
+Tests: wpa-dhclient
+Depends: python3, hostapd, dnsmasq-base, wpasupplicant, isc-dhcp-client, iw
+Restrictions: needs-root allow-stderr isolation-machine skippable
+
+Tests: nm.py
+Depends: python3, dnsmasq-base, isc-dhcp-client, gir1.2-nm-1.0, network-manager, hostapd, iw, python3-dbusmock, python3-netaddr, wpasupplicant, easy-rsa
+Restrictions: needs-root isolation-machine skippable
+
+Tests: killswitches-no-urfkill
+Depends: network-manager, build-essential, linux-headers-generic [!i386], rfkill
+Restrictions: needs-root allow-stderr isolation-machine skippable
+
+Tests: urfkill-integration
+Depends: network-manager, build-essential, linux-headers-generic [!i386], rfkill, urfkill
+Restrictions: needs-root allow-stderr isolation-machine skippable
+
+Tests: nm_netplan.py
+Depends: python3, gir1.2-nm-1.0, network-manager, netplan.io, openvpn, easy-rsa, network-manager-openvpn
+Restrictions: needs-root allow-stderr isolation-container
