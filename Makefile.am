@@ -2617,7 +2617,8 @@ $(src_core_libNetworkManagerBase_la_OBJECTS): $(src_libnm_core_public_mkenums_h)
 
 ###############################################################################
 
-src_core_libNetworkManager_la_CPPFLAGS = $(src_core_cppflags)
+src_core_libNetworkManager_la_CPPFLAGS = $(src_core_cppflags) \
+	$(NETPLAN_CFLAGS)
 
 src_core_libNetworkManager_la_SOURCES = \
 	\
@@ -2832,6 +2833,7 @@ src_core_libNetworkManager_la_LIBADD = \
 	$(LIBAUDIT_LIBS) \
 	$(LIBPSL_LIBS) \
 	$(LIBCURL_LIBS) \
+	$(NETPLAN_LIBS) \
 	$(NULL)
 
 $(src_core_libNetworkManager_la_OBJECTS): $(src_libnm_core_public_mkenums_h)

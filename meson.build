@@ -275,6 +275,8 @@ config_h.set10('HAVE_LIBSYSTEMD', libsystemd_dep.found())
 systemd_dep = dependency('systemd', required: false)
 have_systemd_200 = systemd_dep.found() and systemd_dep.version().version_compare('>= 200')
 
+libnetplan_dep = dependency('netplan', version: '>= 0.106', required: false)
+
 gio_unix_dep = dependency('gio-unix-2.0', version: '>= 2.40')
 
 glib_dep = declare_dependency(
@@ -656,6 +658,13 @@ if enable_ovs
   assert(jansson_dep.found(), 'jansson is needed for Open vSwitch integration. Use -Dovs=false to disable it')
 endif
 config_h.set10('WITH_OPENVSWITCH', enable_ovs)
+
+# Netplan integration
+enable_netplan = get_option('netplan')
+if enable_netplan
+  assert(libnetplan_dep.found(), 'libnetplan is needed for Netplan integration.')
+endif
+config_h.set10('WITH_NETPLAN', enable_netplan)
 
 # DNS resolv.conf managers
 config_dns_rc_manager_default = get_option('config_dns_rc_manager_default')
@@ -1088,6 +1097,7 @@ output += '  ofono: ' + enable_ofono.to_string() + '\n'
 output += '  concheck: ' + enable_concheck.to_string() + '\n'
 output += '  libteamdctl: ' + enable_teamdctl.to_string() + '\n'
 output += '  ovs: ' + enable_ovs.to_string() + '\n'
+output += '  netplan: ' + enable_netplan.to_string() + '\n'
 output += '  nmcli: ' + enable_nmcli.to_string() + '\n'
 output += '  nmtui: ' + enable_nmtui.to_string() + '\n'
 output += '  nm-cloud-setup: ' + enable_nm_cloud_setup.to_string() + '\n'

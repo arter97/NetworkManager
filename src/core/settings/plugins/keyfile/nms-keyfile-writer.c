@@ -12,6 +12,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#if WITH_NETPLAN
+#include <net/if.h>
+#include <netplan/parse.h>
+#include <netplan/parse-nm.h>
+#include <netplan/util.h>
+#include <netplan/netplan.h>
+#endif
+
 #include "libnm-core-intern/nm-keyfile-internal.h"
 
 #include "nms-keyfile-utils.h"
@@ -201,6 +209,9 @@ _internal_write_connection(NMConnection                   *connection,
                            char                          **out_path,
                            NMConnection                  **out_reread,
                            gboolean                       *out_reread_same,
+                           #if WITH_NETPLAN
+                           const char                     *rootdir,
+                           #endif
                            GError                        **error)
 {
     nm_auto_unref_keyfile GKeyFile *kf_file        = NULL;
@@ -414,11 +425,161 @@ _internal_write_connection(NMConnection                   *connection,
     if (existing_path && !existing_path_read_only && !nm_streq(path, existing_path))
         unlink(existing_path);
 
+    #if WITH_NETPLAN
+    NetplanParser *npp      = NULL;
+    NetplanState  *np_state = NULL;
+
+    /* NETPLAN: write only non-temporary files to /etc/netplan/... */
+    if (!is_volatile && !is_nm_generated && !is_external &&
+        strstr(keyfile_dir, "/etc/NetworkManager/system-connections")) {
+        g_autofree gchar *ssid = g_key_file_get_string(kf_file, "wifi", "ssid", NULL);
+        g_autofree gchar *escaped_ssid = ssid ?
+                                         g_uri_escape_string(ssid, NULL, TRUE) : NULL;
+        g_autofree gchar *netplan_id = NULL;
+        ssize_t netplan_id_size = 0;
+        NetplanNetDefinition *netdef = NULL;
+        NetplanStateIterator state_iter;
+        const gchar* kf_path = path;
+
+        if (existing_path && strstr(existing_path, "system-connections/netplan-")) {
+            netplan_id = g_malloc0(strlen(existing_path));
+            netplan_id_size = netplan_get_id_from_nm_filepath(existing_path, ssid, netplan_id, strlen(existing_path) - 1);
+            if (netplan_id_size <= 0) {
+                g_free(netplan_id);
+                netplan_id = NULL;
+            }
+        }
+
+        if (netplan_id && existing_path) {
+            GFile* from = g_file_new_for_path(path);
+            GFile* to = g_file_new_for_path(existing_path);
+            g_file_copy(from, to, G_FILE_COPY_OVERWRITE, NULL, NULL, NULL, NULL);
+            kf_path = existing_path;
+        }
+
+        // push keyfile into libnetplan for parsing (using existing_path, if available,
+        // to be able to extract the original netdef_id and override existing settings)
+        npp = netplan_parser_new();
+
+        if (!netplan_parser_load_keyfile(npp, kf_path, &local_err)) {
+            g_set_error (error, NM_SETTINGS_ERROR, NM_SETTINGS_ERROR_FAILED,
+                         "netplan: YAML translation failed: %s", local_err->message);
+            goto netplan_parser_error;
+        }
+
+        np_state = netplan_state_new();
+        if (!netplan_state_import_parser_results(np_state, npp, &local_err)) {
+            g_set_error (error, NM_SETTINGS_ERROR, NM_SETTINGS_ERROR_FAILED,
+                         "netplan: YAML validation failed: %s", local_err->message);
+            goto netplan_error;
+        }
+
+        netplan_state_iterator_init(np_state, &state_iter);
+        /* At this point we have a single netdef in the netplan state */
+        netdef = netplan_state_iterator_next(&state_iter);
+
+        if (!netdef) {
+            g_set_error (error, NM_SETTINGS_ERROR, NM_SETTINGS_ERROR_FAILED,
+                         "netplan: Netplan state has no network definitions");
+            goto netplan_error;
+        }
+
+        if (!netplan_netdef_write_yaml(np_state, netdef, rootdir, &local_err)) {
+            g_set_error (error, NM_SETTINGS_ERROR, NM_SETTINGS_ERROR_FAILED,
+                         "netplan: Failed to generate YAML: %s", local_err->message);
+            goto netplan_error;
+        }
+
+        /* Delete same connection-profile provided by legacy netplan plugin.
+         * TODO: drop legacy connection handling after 24.04 LTS */
+        g_autofree gchar* legacy_path = NULL;
+        legacy_path = g_strdup_printf("/etc/netplan/NM-%s.yaml", nm_connection_get_uuid (connection));
+        if (g_file_test(legacy_path, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_REGULAR)) {
+            g_debug("Deleting legacy netplan connection: %s", legacy_path);
+            unlink(legacy_path);
+        }
+
+        /* Clear original keyfile in /etc/NetworkManager/system-connections/,
+         * we've written the /etc/netplan/*.yaml file instead. */
+        unlink(path);
+        if (!generate_netplan(rootdir)) {
+            g_set_error (error, NM_SETTINGS_ERROR, NM_SETTINGS_ERROR_FAILED,
+                         "netplan generate failed");
+            goto netplan_error;
+        }
+
+        // Calculating the maximum space needed to store the new keyfile path
+        ssize_t path_size = strlen(path) + strlen(nm_connection_get_uuid(connection)) + IF_NAMESIZE + 1;
+        if (escaped_ssid)
+            path_size += strlen(escaped_ssid);
+        path_size += 50; // give some extra buffer, e.g. when going from  ConName to ConName.nmconnection
+
+        g_free(path);
+        path = g_malloc0(path_size);
+        path_size = netplan_netdef_get_output_filename(netdef, ssid, path, path_size);
+
+        if (path_size <= 0) {
+            g_set_error (error, NM_SETTINGS_ERROR, NM_SETTINGS_ERROR_FAILED,
+                         "netplan: couldn't determine the keyfile path");
+            goto netplan_error;
+        }
+
+        if (rootdir) {
+            char* final_path = g_build_path(G_DIR_SEPARATOR_S, rootdir, path, NULL);
+            g_free(path);
+            path = final_path;
+        }
+
+        netplan_state_clear(&np_state);
+        netplan_parser_clear(&npp);
+
+        /* re-read again: this time the connection profile newly generated by netplan in /run/... */
+        if (   out_reread
+            || out_reread_same) {
+            gs_free_error GError *reread_error = NULL;
+
+            //XXX: why does the _from_keyfile function behave differently?
+            //reread = nms_keyfile_reader_from_keyfile (kf_file, path, NULL, profile_dir, FALSE, &reread_error);
+            reread = nms_keyfile_reader_from_file (path, profile_dir, NULL, NULL, NULL, NULL, NULL, NULL, &reread_error);
+
+            if (   !reread
+                || !nm_connection_normalize (reread, NULL, NULL, &reread_error)) {
+                nm_log_err (LOGD_SETTINGS, "BUG: the profile cannot be stored in keyfile format without becoming unusable: %s", reread_error->message);
+                g_set_error (error, NM_SETTINGS_ERROR, NM_SETTINGS_ERROR_FAILED,
+                             "keyfile writer produces an invalid connection: %s",
+                             reread_error->message);
+                nm_assert_not_reached ();
+                return FALSE;
+            }
+
+            if (out_reread_same) {
+                reread_same = !!nm_connection_compare (reread, connection, NM_SETTING_COMPARE_FLAG_EXACT);
+
+                nm_assert (reread_same == nm_connection_compare (connection, reread, NM_SETTING_COMPARE_FLAG_EXACT));
+                nm_assert (reread_same == ({
+                                                gs_unref_hashtable GHashTable *_settings = NULL;
+
+                                                (   nm_connection_diff (reread, connection, NM_SETTING_COMPARE_FLAG_EXACT, &_settings)
+                                                 && !_settings);
+                                           }));
+            }
+        }
+    }
+    #endif
+
     NM_SET_OUT(out_reread, g_steal_pointer(&reread));
     NM_SET_OUT(out_reread_same, reread_same);
     NM_SET_OUT(out_path, g_steal_pointer(&path));
 
     return TRUE;
+
+#if WITH_NETPLAN
+netplan_error:
+    netplan_state_clear(&np_state);
+netplan_parser_error:
+    netplan_parser_clear(&npp);
+    return FALSE;
+#endif
 }
 
 gboolean
@@ -459,6 +620,9 @@ nms_keyfile_writer_connection(NMConnection                   *connection,
                                       out_path,
                                       out_reread,
                                       out_reread_same,
+                                      #if WITH_NETPLAN
+                                      NULL,
+                                      #endif
                                       error);
 }
 
@@ -472,6 +636,12 @@ nmtst_keyfile_writer_test_connection(NMConnection  *connection,
                                      gboolean      *out_reread_same,
                                      GError       **error)
 {
+    #if WITH_NETPLAN
+    gchar *rootdir = g_strdup(keyfile_dir);
+    if (g_str_has_suffix (keyfile_dir, "/run/NetworkManager/system-connections")) {
+        rootdir[strlen(rootdir)-38] = '\0'; /* 38 = strlen("/run/NetworkManager/...") */
+    }
+    #endif
     return _internal_write_connection(connection,
                                       FALSE,
                                       FALSE,
@@ -491,5 +661,8 @@ nmtst_keyfile_writer_test_connection(NMConnection  *connection,
                                       out_path,
                                       out_reread,
                                       out_reread_same,
+                                      #if WITH_NETPLAN
+                                      rootdir,
+                                      #endif
                                       error);
 }

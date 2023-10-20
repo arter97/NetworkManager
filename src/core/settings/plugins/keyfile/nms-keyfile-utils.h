@@ -68,4 +68,8 @@ gboolean nms_keyfile_utils_check_file_permissions(NMSKeyfileFiletype filetype,
                                                   struct stat       *out_st,
                                                   GError           **error);
 
+#if WITH_NETPLAN
+gboolean generate_netplan(const char* rootdir);
+#endif
+
 #endif /* __NMS_KEYFILE_UTILS_H__ */

@@ -12,6 +12,9 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#if WITH_NETPLAN
+#include <netplan/util.h>
+#endif
 
 #include "libnm-std-aux/c-list-util.h"
 #include "libnm-glib-aux/nm-c-list.h"
@@ -309,6 +312,12 @@ _load_file(NMSKeyfilePlugin     *self,
     gs_free char                 *full_filename    = NULL;
     struct stat                   st;
 
+    #if WITH_NETPLAN
+    // Handle all netplan generated connections via STORAGE_TYPE_ETC, as they live in /etc/netplan
+    if (g_str_has_prefix(filename, "netplan-"))
+        storage_type = NMS_KEYFILE_STORAGE_TYPE_ETC;
+    #endif
+
     if (_ignore_filename(storage_type, filename)) {
         gs_free char *nmmeta                    = NULL;
         gs_free char *loaded_path               = NULL;
@@ -584,6 +593,9 @@ reload_connections(NMSettingsPlugin                      *plugin,
         NM_SETT_UTIL_STORAGES_INIT(storages_new, nms_keyfile_storage_destroy);
     int i;
 
+    #if WITH_NETPLAN
+    generate_netplan(NULL);
+    #endif
     _load_dir(self, NMS_KEYFILE_STORAGE_TYPE_RUN, priv->dirname_run, &storages_new);
     if (priv->dirname_etc)
         _load_dir(self, NMS_KEYFILE_STORAGE_TYPE_ETC, priv->dirname_etc, &storages_new);
@@ -1046,6 +1058,15 @@ delete_connection(NMSettingsPlugin *plugin, NMSettingsStorage *storage_x, GError
     previous_filename = nms_keyfile_storage_get_filename(storage);
     uuid              = nms_keyfile_storage_get_uuid(storage);
 
+    #if WITH_NETPLAN
+    nm_auto_unref_keyfile GKeyFile *key_file = NULL;
+    key_file = g_key_file_new ();
+    if (!g_key_file_load_from_file (key_file, previous_filename, G_KEY_FILE_NONE, error))
+        return FALSE;
+    g_autofree gchar* ssid = NULL;
+    ssid = g_key_file_get_string(key_file, "wifi", "ssid", NULL);
+    #endif
+
     if (!NM_IN_SET(storage->storage_type,
                    NMS_KEYFILE_STORAGE_TYPE_ETC,
                    NMS_KEYFILE_STORAGE_TYPE_RUN)) {
@@ -1070,6 +1091,19 @@ delete_connection(NMSettingsPlugin *plugin, NMSettingsStorage *storage_x, GError
             operation_message = "does not exist on disk";
     } else
         operation_message = "deleted from disk";
+
+    #if WITH_NETPLAN
+    g_autofree gchar *netplan_id = NULL;
+    ssize_t           netplan_id_size = 0;
+
+    netplan_id = g_malloc0(strlen(previous_filename));
+    netplan_id_size = netplan_get_id_from_nm_filepath(previous_filename, ssid, netplan_id, strlen(previous_filename) - 1);
+    if (netplan_id_size > 0) {
+        _LOGI ("deleting netplan connection: %s", netplan_id);
+        netplan_delete_connection(netplan_id, NULL);
+        generate_netplan(NULL);
+    }
+    #endif
 
     _LOGT("commit: deleted \"%s\", %s %s (%s%s%s%s)",
           previous_filename,

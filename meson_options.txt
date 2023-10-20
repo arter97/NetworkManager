@@ -38,6 +38,7 @@ option('ofono', type: 'boolean', value: false, description: 'Enable oFono suppor
 option('concheck', type: 'boolean', value: true, description: 'enable connectivity checking support')
 option('teamdctl', type: 'boolean', value: false, description: 'enable Teamd control support')
 option('ovs', type: 'boolean', value: true, description: 'enable Open vSwitch support')
+option('netplan', type: 'boolean', value: true, description: 'Enable Netplan integration')
 option('nmcli', type: 'boolean', value: true, description: 'Build nmcli')
 option('nmtui', type: 'boolean', value: true, description: 'Build nmtui')
 option('nm_cloud_setup', type: 'boolean', value: true, description: 'Build nm-cloud-setup, a tool for automatically configuring networking in cloud')

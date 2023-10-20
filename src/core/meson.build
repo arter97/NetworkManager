@@ -71,6 +71,7 @@ nm_deps = [
   libndp_dep,
   libudev_dep,
   logind_dep,
+  libnetplan_dep,
 ]
 
 if enable_concheck

@@ -912,6 +912,22 @@ else
     AC_DEFINE(WITH_OPENVSWITCH, 0, [Whether we build with OVS plugin])
 fi
 
+# Netplan integration
+AC_ARG_ENABLE(netplan, AS_HELP_STRING([--enable-netplan], [Enable Netplan integration]))
+if test "${enable_netplan}" != "no"; then
+	PKG_CHECK_MODULES(NETPLAN, [netplan >= 0.106], [enable_netplan=yes], [enable_netplan=no])
+	if test "$enable_netplan" != "yes"; then
+		AC_MSG_ERROR(Netplan is required)
+	fi
+	enable_netplan='yes'
+fi
+AM_CONDITIONAL(WITH_NETPLAN, test "${enable_netplan}" = "yes")
+if test "${enable_netplan}" = "yes" ; then
+    AC_DEFINE(WITH_NETPLAN, 1, [Whether we build with Netplan integration])
+else
+    AC_DEFINE(WITH_NETPLAN, 0, [Whether we build with Netplan integration])
+fi
+
 # DHCP client support
 AC_ARG_WITH([dhclient],
             AS_HELP_STRING([--with-dhclient=yes|no|path], [Enable dhclient support]))
@@ -1448,6 +1464,7 @@ echo "  ofono: $with_ofono"
 echo "  concheck: $enable_concheck"
 echo "  libteamdctl: $enable_teamdctl"
 echo "  ovs: $enable_ovs"
+echo "  netplan: $enable_netplan"
 echo "  nmcli: $build_nmcli"
 echo "  nmtui: $build_nmtui"
 echo "  nm-cloud-setup: $with_nm_cloud_setup"
